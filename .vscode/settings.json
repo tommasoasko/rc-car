@@ -1,0 +1,9 @@
+{
+  "idf.currentSetup": "C:\\Users\\tomma\\esp\\v5.5.1\\esp-idf",
+  "clangd.path": "C:\\Users\\tomma\\.espressif\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=c:\\Users\\tomma\\embedded_project\\rc_car\\build"
+  ]
+}
