@@ -4,6 +4,7 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_mac.h"
 #include "include/joystick.h"
+#include "freertos/queue.h"
 
 #define ADC_CHANNEL_X ADC_CHANNEL_6
 #define ADC_CHANNEL_Y ADC_CHANNEL_7
@@ -18,7 +19,11 @@
 
 joystick_t my_joystick = { 0, 0, 1};
 
+QueueHandle_t queue;
+
 void joystick_init() {
+    // queue creation
+    queue = xQueueCreate(10, sizeof(joystick_dir_t));
 
     // configuring the adc for X, Y
     adc_oneshot_chan_cfg_t config = {
@@ -89,7 +94,7 @@ void joystick_task(void *args){
         if (new_dir != last_dir && !in_dead_zone()){
             printf("[JOYSTICK DEBUG] dir changed: %d\n", new_dir);
             if (new_dir != CENTER){
-                send_message_to_fsm_queue(JOYSTICK, new_dir);
+                xQueueSend(queue, &new_dir, pdMS_TO_TICKS(0));
             } 
             last_dir = new_dir;
         }
