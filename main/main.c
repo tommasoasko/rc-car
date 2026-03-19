@@ -1,43 +1,22 @@
-/*
- * SPDX-FileCopyrightText: 2010-2022 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: CC0-1.0
- */
-
 #include <stdio.h>
-#include <inttypes.h>
-#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_chip_info.h"
-#include "esp_system.h"
 #include "freertos/queue.h"
 #include "joystick.h"
 
 void app_main(void)
 {
+    // Initialize joystick
+    joystick_init();
+
     while(1){
-        joystick_dir_t dir;
-        xQueueReceive(queue, &dir, portMAX_DELAY);
-        switch (dir)
-        {
-        case CENTER:
-            printf("CENTER\n");
-            break;
-        case UP:
-            printf("UP\n");
-            break;
-        case DOWN:
-            printf("DOWN\n");
-            break;
-        case LEFT:
-            printf("LEFT\n");
-            break;
-        case RIGHT:
-            printf("RIGHT\n");
-            break;
-        default:
-            break;
+        car_control_t cmd;
+        // Waits for a new snapshot of the PAD state
+        if (xQueueReceive(queue, &cmd, portMAX_DELAY)) {
+            printf("Sterzo: %ld | Gas (R2): %ld | Freno (L2): %ld | Tasto X: %d\n", 
+                    cmd.steer, cmd.throttle, cmd.brake, cmd.action_btn);
+            
+            // TODO l298n_set_drive_speed() and l298n_set_steer_speed()
         }
     }
 }

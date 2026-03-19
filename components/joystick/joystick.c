@@ -1,104 +1,117 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/gpio.h"
-#include "esp_adc/adc_oneshot.h"
-#include "esp_mac.h"
-#include "include/joystick.h"
 #include "freertos/queue.h"
+#include "joystick.h"
 
-#define ADC_CHANNEL_X ADC_CHANNEL_6
-#define ADC_CHANNEL_Y ADC_CHANNEL_7
-#define GPIO_SW GPIO_NUM_27
-
-#define THRESH_LOW 800
-#define THRESH_UP 3200
-#define DEAD_ZONE_UP 2800
-#define DEAD_ZONE_LOW 1200
-
-#define DEBOUNCE_MS_JS  30
-
-joystick_t my_joystick = { 0, 0, 1};
+// Bluetooth e Bluepad32 libraries
+#include <uni.h>
+#include <btstack_port_esp32.h>
+#include <btstack_run_loop.h>
 
 QueueHandle_t queue;
 
-void joystick_init() {
-    // queue creation
-    queue = xQueueCreate(10, sizeof(joystick_dir_t));
+// Bluepad32 functions
 
-    // configuring the adc for X, Y
-    adc_oneshot_chan_cfg_t config = {
-        .bitwidth = ADC_BITWIDTH_DEFAULT, // default is 12 bits -> 12 bits to represent analog input voltage -> not necessary but the "noise" makes less impact
-        .atten = ADC_ATTEN_DB_12,        // 12DB makes the measurement range from 0V to 3.3V -> not sure it's necessary to navigate the menu
-    };
+static void my_platform_init(int argc, const char** argv) {}
+
+static void my_platform_on_init_complete(void) {
+    uni_bt_enable_new_connections_safe(true); // deprecated -> form bluepad32 4.2 it is automatic
+}
+
+static void my_platform_on_device_connected(uni_hid_device_t* d) {
+    printf("[PS4] Controller connectet!\n");
+}
+
+static void my_platform_on_device_disconnected(uni_hid_device_t* d) {
+    printf("[PS4] Controller disconnected!\n");
+}
+
+static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
+    printf("[PS4] Controller ready to use!\n");
+    return 0;
+}
+
+static void my_platform_on_oob_event(uni_platform_oob_event_t event, void* data) {}
+
+static const uni_property_t* my_platform_get_properties(uni_property_idx_t idx) {
+    return NULL; 
+}
+
+// Data reading
+
+/// @brief This function is automatically called when the controller is touched, it captures
+/// the button pressed or stick moved and sends the event to the queue.
+/// @param d physical device
+/// @param ctl logic controller
+static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t* ctl) {
+    uni_gamepad_t *gp = &ctl->gamepad;
+
+    // Current state snapshot
+    car_control_t current_state;
     
-    // channel 6 = gpio34, channel 7 = gpio35
-    adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_6, &config);
-    adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_7, &config);
+    // Steer (L3 stick)
+    int32_t normalized_steer = (gp->axis_x) / 103.2;
+    current_state.steer = normalized_steer; // axis_x: min = -511, max = +512       
+    
+    // Throttle (R2)
+    int32_t normalized_throttle = (gp->throttle) / 103.2;
+    current_state.throttle = normalized_throttle; // throttle: min = 0, max = 1023
 
-    // configuring gpio for SW
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << GPIO_SW), // this mask is needed not to ignore the GPIO 32 (if a bit in the mask is 0, it is ignored, so we set the 32nd bit to 1)
-        .mode = GPIO_MODE_INPUT, // set to input mode
-        .pull_up_en = GPIO_PULLUP_ENABLE // if pushed, it's 0, otherwise it's 1 
-    };
-    gpio_config(&io_conf);
+    // Brake (L2)
+    int32_t normalized_brake = (gp->brake) / 103.2;
+    current_state.brake = normalized_brake; // brake: min = 0, max = 1023
+    
+    // Lights (X button) TODO
+    current_state.action_btn = (gp->buttons & BUTTON_A) ? true : false;
 
-    // creating the task
-    xTaskCreate(joystick_task, "joystick_task", 2048, NULL, 3, NULL); // not sure about these parameters (expecially the stack depth), but for now should work
+    // default state
+    static car_control_t last_state = {0, 0, 0, false};
+    
+    // Deadzone filter to remove noise
+    // if (abs(current_state.steer) < 15) current_state.steer = 0;
+    // if (current_state.throttle < 5) current_state.throttle = 0;
+    // if (current_state.brake < 5) current_state.brake = 0;
+
+    if (current_state.steer != last_state.steer || 
+        current_state.throttle != last_state.throttle ||
+        current_state.brake != last_state.brake ||
+        current_state.action_btn != last_state.action_btn) 
+    {
+        // Send the struct to the queue
+        xQueueSend(queue, &current_state, pdMS_TO_TICKS(0));
+        last_state = current_state; // Refresh state
+    }
 }
 
-void joystick_get_raw(){
-    adc_oneshot_read(adc1_handle, ADC_CHANNEL_X, &my_joystick.x);
-    adc_oneshot_read(adc1_handle, ADC_CHANNEL_Y, &my_joystick.y);
-    my_joystick.sw = gpio_get_level(GPIO_SW);
+// Bluepad32 configuration
+static struct uni_platform my_platform = {
+    .name = "RC Car",
+    .init = my_platform_init,
+    .on_init_complete = my_platform_on_init_complete,
+    .on_device_connected = my_platform_on_device_connected,
+    .on_device_disconnected = my_platform_on_device_disconnected,
+    .on_device_ready = my_platform_on_device_ready,
+    .on_oob_event = my_platform_on_oob_event,
+    .on_controller_data = my_platform_on_controller_data,
+    .get_property = my_platform_get_properties,
+};
+
+struct uni_platform* get_my_platform(void) {
+    return &my_platform;
 }
 
-// converts the voltage to a direction
-joystick_dir_t joystick_get_direction(){
-    if (my_joystick.sw == 0){
-        return PRESS;
-    }
-    if (my_joystick.x > THRESH_UP){
-        return RIGHT;
-    }
-    if (my_joystick.x < THRESH_LOW){
-        return LEFT;
-    }
-    if (my_joystick.y > THRESH_UP){
-        return UP;
-    }
-    if (my_joystick.y < THRESH_LOW){
-        return DOWN;
-    }
-    return CENTER;
+// Bluetooth task
+void joystick_task(void *args) {
+    // Initialize bluetooth antenna
+    btstack_init();
+    uni_platform_set_custom(get_my_platform());
+    uni_init(0, NULL);
+    
+    btstack_run_loop_execute();
 }
 
-bool in_dead_zone(){
-    return (my_joystick.x < THRESH_UP
-        && my_joystick.x > DEAD_ZONE_UP)
-        || (my_joystick.y < DEAD_ZONE_LOW
-        && my_joystick.y > THRESH_LOW); 
-}
-
-// main task
-void joystick_task(void *args){
-    // set the "default" value for the last joystick direction
-    joystick_dir_t last_dir = CENTER;
-
-    // polling
-    while(1){
-        joystick_get_raw();
-        joystick_dir_t new_dir = joystick_get_direction();
-
-        // ignore the repetitive events
-        if (new_dir != last_dir && !in_dead_zone()){
-            printf("[JOYSTICK DEBUG] dir changed: %d\n", new_dir);
-            if (new_dir != CENTER){
-                xQueueSend(queue, &new_dir, pdMS_TO_TICKS(0));
-            } 
-            last_dir = new_dir;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_MS_JS)); // 30ms should be a good trade off between pollong at a good ratio and not wasting CPU cycles (polling 33Hz)
-    }
+void joystick_init(void) {
+    queue = xQueueCreate(10, sizeof(car_control_t));
+    
+    xTaskCreate(joystick_task, "ps4_task", 4096, NULL, 5, NULL);
 }
