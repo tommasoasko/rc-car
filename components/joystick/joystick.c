@@ -50,8 +50,7 @@ static void my_platform_on_controller_data(uni_hid_device_t* d, uni_controller_t
     car_control_t current_state;
     
     // Steer (L3 stick)
-    int32_t normalized_steer = (gp->axis_x) / 103.2;
-    current_state.steer = normalized_steer; // axis_x: min = -511, max = +512       
+    current_state.steer = gp->axis_x; // axis_x: min = -511, max = +512       
     
     // Throttle (R2)
     int32_t normalized_throttle = (gp->throttle) / 103.2;
